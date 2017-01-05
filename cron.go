@@ -16,6 +16,8 @@ type Cron struct {
 	entries  []*Entry
 	stop     chan struct{}
 	add      chan *Entry
+	update   chan *Entry
+	del      chan string
 	snapshot chan []*Entry
 	running  bool
 	ErrorLog *log.Logger
@@ -36,6 +38,8 @@ type Schedule interface {
 
 // Entry consists of a schedule and the func to execute on that schedule.
 type Entry struct {
+	Name string
+
 	// The schedule on which this job should be run.
 	Schedule Schedule
 
@@ -80,6 +84,8 @@ func NewWithLocation(location *time.Location) *Cron {
 	return &Cron{
 		entries:  nil,
 		add:      make(chan *Entry),
+		update:   make(chan *Entry),
+		del:      make(chan string),
 		stop:     make(chan struct{}),
 		snapshot: make(chan []*Entry),
 		running:  false,
@@ -94,23 +100,43 @@ type FuncJob func()
 func (f FuncJob) Run() { f() }
 
 // AddFunc adds a func to the Cron to be run on the given schedule.
-func (c *Cron) AddFunc(spec string, cmd func()) error {
-	return c.AddJob(spec, FuncJob(cmd))
+func (c *Cron) AddFunc(name string, spec string, cmd func()) error {
+	return c.AddJob(name, spec, FuncJob(cmd))
 }
 
 // AddJob adds a Job to the Cron to be run on the given schedule.
-func (c *Cron) AddJob(spec string, cmd Job) error {
+func (c *Cron) AddJob(name string, spec string, cmd Job) error {
 	schedule, err := Parse(spec)
 	if err != nil {
 		return err
 	}
-	c.Schedule(schedule, cmd)
+	c.Schedule(name, schedule, cmd)
 	return nil
 }
 
-// Schedule adds a Job to the Cron to be run on the given schedule.
-func (c *Cron) Schedule(schedule Schedule, cmd Job) {
+// UpdateJob uypdates a Job to the Cron to be run on the given schedule.
+func (c *Cron) UpdateJob(name string, spec string) error {
+	schedule, err := Parse(spec)
+	if err != nil {
+		return err
+	}
 	entry := &Entry{
+		Name:     name,
+		Schedule: schedule,
+	}
+	c.update <- entry
+	return nil
+}
+
+// DeleteJob deletes a Job to the Cron to be run on the given schedule.
+func (c *Cron) DeleteJob(name string) {
+	c.del <- name
+}
+
+// Schedule adds a Job to the Cron to be run on the given schedule.
+func (c *Cron) Schedule(name string, schedule Schedule, cmd Job) {
+	entry := &Entry{
+		Name:     name,
 		Schedule: schedule,
 		Job:      cmd,
 	}
@@ -198,10 +224,32 @@ func (c *Cron) run() {
 		case newEntry := <-c.add:
 			c.entries = append(c.entries, newEntry)
 			newEntry.Next = newEntry.Schedule.Next(time.Now().In(c.location))
-
+		case updateEntry := <-c.update:
+			for _, entry := range c.entries {
+				if entry.Name != updateEntry.Name {
+					continue
+				}
+				entry.Schedule = updateEntry.Schedule
+				entry.Next = entry.Schedule.Next(time.Now().In(c.location))
+				break
+			}
+		case name := <-c.del:
+			index := -1
+			for idx, entry := range c.entries {
+				if entry.Name == name {
+					index = idx
+					break
+				}
+			}
+			if index >= 0 {
+				if len(c.entries) == 1 {
+					c.entries = nil
+				} else {
+					c.entries = append(c.entries[:index], c.entries[index+1:]...)
+				}
+			}
 		case <-c.snapshot:
 			c.snapshot <- c.entrySnapshot()
-
 		case <-c.stop:
 			timer.Stop()
 			return
