@@ -222,8 +222,18 @@ func (c *Cron) run() {
 			continue
 
 		case newEntry := <-c.add:
-			c.entries = append(c.entries, newEntry)
-			newEntry.Next = newEntry.Schedule.Next(time.Now().In(c.location))
+			var found bool
+			for _, entry := range c.entries {
+				if entry.Name != newEntry.Name {
+					continue
+				}
+				found = true
+				break
+			}
+			if !found {
+				c.entries = append(c.entries, newEntry)
+				newEntry.Next = newEntry.Schedule.Next(time.Now().In(c.location))
+			}
 		case updateEntry := <-c.update:
 			for _, entry := range c.entries {
 				if entry.Name != updateEntry.Name {
