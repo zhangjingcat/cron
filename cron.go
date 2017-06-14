@@ -224,11 +224,10 @@ func (c *Cron) run() {
 		case newEntry := <-c.add:
 			var found bool
 			for _, entry := range c.entries {
-				if entry.Name != newEntry.Name {
-					continue
+				if entry.Name == newEntry.Name {
+					found = true
+					break
 				}
-				found = true
-				break
 			}
 			if !found {
 				c.entries = append(c.entries, newEntry)
